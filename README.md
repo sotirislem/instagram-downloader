@@ -32,4 +32,4 @@ npm install
 ```
 
 ## Run Demo:
-![Screenshot](https://user-images.githubusercontent.com/10964246/105494775-f98bd100-5cc3-11eb-972f-b531258b5fd9.png)
+![Screenshot](https://user-images.githubusercontent.com/10964246/105612031-c596d580-5dc1-11eb-9cc5-bd8da8fa827f.PNG)
