@@ -1,5 +1,3 @@
-// Instagram Public Profile Posts Downloader //
-
 const axios = require('axios');
 const fs = require('fs');
 const colors = require('colors');
@@ -35,14 +33,25 @@ let user_posts_next_page_cursor;
 let user_fetched_posts = 0;
 let user_fetched_photos = 0;
 let user_fetched_videos = 0;
-let postsArray = [];
+let user_fetched_media = 0;
+let user_postsArray = [];
+
 let proccessed_post;
+
+const POST_MEDIA_METADATA = {
+	Proccessed_files: 0,
+	Downloaded_images: 0,
+	Downloaded_videos: 0,
+	Skipped_file_exists: 0,
+	Skipped_videos: 0,
+};
 
 //////////////////////////////////////////////////////////////////////////////
 
 class Post {
-	constructor(post_num, is_video, video_url, taken_at_timestamp, location_name, accessibility_caption, media_to_caption_text, display_url, dimensions_height, dimensions_width) {
+	constructor(post_num, post_shortcode, is_video, video_url, taken_at_timestamp, location_name, accessibility_caption, media_to_caption_text, display_url, dimensions_height, dimensions_width) {
 		this.post_num = '#' + post_num;
+		this.post_url = `https://www.instagram.com/p/${post_shortcode}/`
 		this.media_to_caption_text = media_to_caption_text;
 		this.location_name = location_name;
 		this.taken_at_timestamp = taken_at_timestamp;
@@ -81,14 +90,15 @@ function fetchPosts(edge_owner_to_timeline_media, parent = null) {
 
 			proccessed_post--;
 			user_fetched_posts++;
-			postsArray.push(newPost);
+			user_postsArray.push(newPost);
 
 			continue;
 		}
 
-		node.is_video && user_fetched_videos++; !node.is_video && user_fetched_photos++;
+		node.is_video && user_fetched_videos++; !node.is_video && user_fetched_photos++; user_fetched_media++;
 		let newPost = new Post(
 			proccessed_post,
+			parent === null ? node.shortcode : parent.shortcode,
 			node.is_video,
 			node.is_video ? node.video_url : undefined,
 			parent === null ? node.taken_at_timestamp : parent.taken_at_timestamp,
@@ -102,7 +112,7 @@ function fetchPosts(edge_owner_to_timeline_media, parent = null) {
 		if (parent === null) {
 			proccessed_post--;
 			user_fetched_posts++;
-			postsArray.push(newPost);
+			user_postsArray.push(newPost);
 		}
 
 		addedPosts.push(newPost);
@@ -111,7 +121,8 @@ function fetchPosts(edge_owner_to_timeline_media, parent = null) {
 	return addedPosts;
 };
 
-async function downloadPostMedia(post, post_num) {
+async function processPostMedia(post, post_num) {
+	POST_MEDIA_METADATA.Proccessed_files++;
 	if (download_photos_and_videos || !post.is_video) {
 		let mediaUrl;
 		let savePath;
@@ -131,13 +142,20 @@ async function downloadPostMedia(post, post_num) {
 				url: mediaUrl,
 				responseType: "stream"
 			}).then(async function (response) {
+				(!post.is_video) && POST_MEDIA_METADATA.Downloaded_images++;
+				(post.is_video) && POST_MEDIA_METADATA.Downloaded_videos++;
+				
 				return new Promise(resolve => {
 					let stream = fs.createWriteStream(savePath);
 					response.data.pipe(stream);
 					stream.on('finish', resolve);
 				});
 			});
+		} else {
+			POST_MEDIA_METADATA.Skipped_file_exists++;
 		}
+	} else {
+		POST_MEDIA_METADATA.Skipped_videos++;
 	}
 }
 
@@ -201,8 +219,8 @@ axios.get(user_url)
 		console.log(`Max_Posts_Fetch: `.yellow + `${max_posts_fetch === Number.MAX_SAFE_INTEGER ? 'ALL' : '#' + max_posts_fetch}`);
 		console.log(`Download_photos_and_videos: `.yellow + `${download_photos_and_videos} ${download_photos_and_videos === false ? '(Images only)' : ''}`);
 
+		console.log(`\n==> Fetching user's posts. Please wait...`);
 		fetchPosts(edge_owner_to_timeline_media);
-
 		while (user_posts_has_next_page && user_fetched_posts < max_posts_fetch) {
 			let nextPagePosts = 50;		// The max value that API can accept
 			if (max_posts_fetch - user_fetched_posts < nextPagePosts) nextPagePosts = max_posts_fetch - user_fetched_posts;
@@ -235,31 +253,28 @@ axios.get(user_url)
 			user_total_posts,
 			user_fetched_posts,
 			user_fetched_photos,
-			user_fetched_videos
+			user_fetched_videos,
+			user_fetched_media
 		}
 
-		return fs.writeFile(user_json_path, JSON.stringify({ user, posts: postsArray }), (err) => { if (err) console.error(err) });
+		return fs.writeFile(user_json_path, JSON.stringify({ user, posts: user_postsArray }), (err) => { if (err) console.error(err) });
 	})
 	.then(async function () {
-		console.log(`\n*** File '${user_json_path}' successfully created! Start fetching ${user_fetched_posts} latest Posts...`.green);
+		console.log(`*** File '${user_json_path.substring(user_json_path.lastIndexOf('/')+1)}' successfully created! Starting to process `.green + `${user_fetched_posts}` + ` latest Posts...`.green + ` (${user_fetched_media} media files)\n`);
 
 		!fs.existsSync(user_dir_path) && fs.mkdirSync(user_dir_path);
 
-		console.log();
 		proccessed_post = 1;
-		for (let post of postsArray) {
-			process.stdout.write(`==> Downloading ${proccessed_post++} of ${user_fetched_posts} total fetched Posts...\r`);
-			await downloadPostMedia(post, post.post_num);
+		for (let post of user_postsArray) {
+			process.stdout.write(`==> Processing ${proccessed_post++} of ${user_fetched_posts} total fetched Posts...\r`);
+			await processPostMedia(post, post.post_num);
 			for (let children_post of post.children_posts) {
-				await downloadPostMedia(children_post, post.post_num);
+				await processPostMedia(children_post, post.post_num);
 			}
 		}
 
-		if (!download_photos_and_videos) {
-			console.log(`\n*** Download completed! Got `.red + `${user_fetched_photos}` + ` total Images.`.red);
-		} else {
-			console.log(`\n*** Download completed! Got `.red + `${user_fetched_photos}` + ` total Images and `.red + `${user_fetched_videos}` + ` total Videos.`.red);
-		}
+		console.log(`\n*** Processing completed!`.green);
+		console.log(POST_MEDIA_METADATA);
 	})
 	.catch(function (error) {
 		if (error.name === 'TypeError' && error.message === "Cannot read property '0' of undefined") {
